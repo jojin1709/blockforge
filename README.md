@@ -13,7 +13,7 @@ Infinite streamed terrain · Block breaking & placing · Inventory & crafting ·
 
 [![Rust](https://img.shields.io/badge/Rust-1.98-orange?logo=rust)](https://www.rust-lang.org/)
 [![Bevy](https://img.shields.io/badge/Bevy-0.20-blue?logo=bevyengine)](https://bevyengine.org/)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blueviolet?logo=gnu)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/jojin1709/blockforge?style=social)](https://github.com/jojin1709/blockforge)
 
 <br/>
@@ -154,7 +154,9 @@ replica/
 
 ## License
 
-All original code and assets. Released under the [MIT License](LICENSE).
+All original code and assets. Released under the [GNU Affero General Public License v3.0](LICENSE).
+
+**No one may copy, redistribute, or rebrand this work without releasing their source code under the same license.**
 
 Not affiliated with, endorsed by, or connected to Mojang / Microsoft / the Minecraft brand.
 
