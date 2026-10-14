@@ -1,0 +1,38 @@
+feature,area,priority,original,clone,notes
+Block world with infinite streamed chunks,world,must,yes,yes,16-wide chunks load around player - DONE Phase 2
+Procedural terrain (hills caves trees ores),world,must,yes,yes,noise-based heightmap + caves - DONE Phase 3
+Break blocks with hand/tool,survival,must,yes,yes,instant hand break drops to inventory - DONE Phase 5+8
+Place blocks from inventory,build,must,yes,yes,consumes stack from hotbar - DONE Phase 5+8
+First-person controls (WASD mouse-look jump),controls,must,yes,yes,own controller - DONE Phase 4
+Gravity + AABB collision,physics,must,yes,yes,no rapier needed for v1 - DONE Phase 4
+Hotbar with 9 slots + selection,ui,must,yes,yes,number keys 1-9 + scroll wheel - DONE Phase 6
+Inventory screen 36 slots,ui,must,yes,yes,E key drag cursor stack - DONE Phase 8
+2x2 grid crafting in inventory,crafting,must,yes,yes,planks sticks shapeless - DONE Phase 8
+3x3 crafting table recipes,crafting,must,yes,no,tools weapons
+Tool tiers (wood stone iron diamond) + durability,survival,must,yes,no,gates progression
+Health hearts + hunger bar,survival,must,yes,yes,regen fall damage apples - DONE Phase 8
+Day/night cycle + sky,world,must,yes,yes,sun orbit sky lerp 6min day - DONE Phase 8
+Basic hostile mobs at night,combat,must,yes,no,zombie skeleton equivalent + animals
+Death and respawn screen,survival,must,yes,no,items drop on death
+Main menu + world select,ui,must,yes,no,create load delete worlds
+Save world to disk / resume,save,must,yes,no,own format not Mojangs
+Pause menu + settings,ui,should,yes,no,render distance volume FOV
+Smooth lighting (AO + light levels),lighting,should,yes,no,block-mesh AO + sky light
+Water + swimming,world,should,yes,yes,translucent fluid blocks - DONE Phase 3+4
+Chest storage blocks,build,should,yes,no,9x3 inventory block
+Furnace smelting,crafting,should,yes,no,cooked food ingots
+Mobs drop items + loot,combat,should,yes,no,entity item drops
+Sprint sneak swim controls,controls,should,yes,yes,Ctrl sprint Shift sneak swim space - DONE Phase 8
+Chat + commands,ui,could,yes,no,/give /time set
+Farming food crops,world,could,yes,no,closes hunger loop
+Sound effects + music,audio,could,yes,no,own assets only
+Particles (block break),fx,could,yes,no,
+Multiplayer servers,network,could,yes,no,skip v1 - own server later
+Redstone-like logic,build,could,yes,no,skip v1
+Nether / dimensions,world,could,yes,no,skip v1
+Enchanting + potions,crafting,could,yes,no,skip v1
+Skins marketplace + Realms,account,skip,yes,no,Mojang service not ours to clone
+Minecraft textures/sounds/name,assets,skip,yes,no,copyrighted - own assets required
+Mojang account login,account,skip,yes,no,own local profiles only
+Anvil/region save format,save,skip,yes,no,design own format
+Official music discs,audio,skip,yes,no,licensed C418 tracks
