@@ -29,11 +29,16 @@ fn lerp_c(a: [f32; 3], b: [f32; 3], t: f32) -> Color {
 
 fn tick_daynight(
     time: Res<Time>,
+    pause: Res<crate::pause::PauseOpen>,
     mut dn: ResMut<DayNight>,
     mut clear: ResMut<ClearColor>,
     mut ambient: ResMut<GlobalAmbientLight>,
     mut sun_q: Query<(&mut Transform, &mut DirectionalLight), With<Sun>>,
+    mut fog_q: Query<&mut DistanceFog>,
 ) {
+    if pause.0 {
+        return;
+    }
     dn.time = (dn.time + time.delta_secs() / DAY_LENGTH) % 1.0;
     let angle = dn.time * std::f32::consts::TAU;
     let sun_dir = Vec3::new(angle.cos(), angle.sin(), 0.35).normalize();
@@ -59,5 +64,8 @@ fn tick_daynight(
         lerp_c(night, night, 0.0)
     };
     clear.0 = sky;
-    ambient.brightness = 30.0 + 170.0 * daylight;
+    ambient.brightness = 80.0 + 320.0 * daylight;
+    for mut fog in fog_q.iter_mut() {
+        fog.color = sky;
+    }
 }

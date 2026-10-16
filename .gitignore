@@ -1,1 +1,6 @@
 /target
+build_out.txt
+run_err.txt
+run_log.txt
+/release
+/installer

@@ -1,8 +1,12 @@
+use std::collections::HashMap;
+
 use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::inventory::*;
+use crate::items;
+use crate::textures;
 
 pub const HOTBAR_SLOTS: usize = 9;
 const SLOT: f32 = 50.0;
@@ -14,6 +18,12 @@ pub struct SlotVis {
 
 #[derive(Component)]
 pub struct SlotCountText;
+
+#[derive(Component)]
+pub struct SlotIcon;
+
+#[derive(Component)]
+pub struct HeldStackIcon;
 
 #[derive(Component)]
 pub struct HeldStack;
@@ -36,27 +46,57 @@ pub struct BlockNameToast;
 #[derive(Component)]
 pub struct ToastTimer(f32);
 
-fn inv_or_craft_changed(inv: Res<Inventory>, craft: Res<CraftGrid>) -> bool {
-    inv.is_changed() || craft.is_changed()
+/// Marks one of the 9 craft-grid cells by its grid position (row-major 3x3).
+#[derive(Component)]
+pub struct CraftCell(pub usize);
+
+/// Sent when the player right-clicks a crafting table block.
+#[derive(Message)]
+pub struct OpenCraftTable;
+
+fn inv_or_craft_changed(inv: Res<Inventory>, craft: Res<CraftGrid>, table: Res<TableCraftOpen>) -> bool {
+    inv.is_changed() || craft.is_changed() || table.is_changed()
 }
+
+/// Per-item 16x16 icon images extracted from the procedural atlas.
+#[derive(Resource)]
+pub struct ItemIcons(pub HashMap<ItemId, Handle<Image>>);
 
 pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_ui).add_systems(
-            Update,
-            (
-                hotbar_input,
-                toast_tick,
-                toggle_inventory,
-                slot_clicks,
-                refresh_slots.run_if(inv_or_craft_changed),
-                update_held,
-            )
-                .chain(),
-        );
+        app.add_message::<OpenCraftTable>()
+            .add_systems(Startup, (setup_icons, setup_ui).chain())
+            .add_systems(
+                Update,
+                (
+                    hotbar_input,
+                    toast_tick,
+                    toggle_inventory,
+                    open_table_ui,
+                    update_craft_layout,
+                    slot_clicks,
+                    refresh_slots.run_if(inv_or_craft_changed),
+                    update_held,
+                )
+                    .chain(),
+            );
     }
+}
+
+fn setup_icons(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    let data = textures::build_atlas_data();
+    let mut map = HashMap::new();
+    for id in 1..=16u16 {
+        let img = textures::extract_tile_image(&data, textures::item_tile(id));
+        map.insert(id, images.add(img));
+    }
+    for &id in items::ALL_ITEMS {
+        let img = textures::extract_tile_image(&data, textures::item_tile(id));
+        map.insert(id, images.add(img));
+    }
+    commands.insert_resource(ItemIcons(map));
 }
 
 fn spawn_slot(
@@ -78,7 +118,7 @@ fn spawn_slot(
             BorderColor::all(Color::srgb(0.25, 0.25, 0.28)),
             Interaction::default(),
             SlotVis { idx },
-            Visibility::Visible,
+            Visibility::Inherited,
         ))
         .with_children(|p| {
             p.spawn((
@@ -95,7 +135,24 @@ fn spawn_slot(
                 },
                 TextColor(Color::srgba(1.0, 1.0, 1.0, 0.95)),
                 SlotCountText,
-                Visibility::Hidden,
+                Visibility::Inherited,
+            ));
+            p.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(0.0),
+                    right: Val::Px(0.0),
+                    bottom: Val::Px(0.0),
+                    margin: UiRect::all(Val::Px(4.0)),
+                    ..default()
+                },
+                ImageNode {
+                    image_mode: NodeImageMode::Stretch,
+                    ..default()
+                },
+                SlotIcon,
+                Visibility::Inherited,
             ));
         })
         .id()
@@ -173,6 +230,23 @@ fn setup_ui(mut commands: Commands) {
                     SlotCountText,
                     Visibility::Hidden,
                 ));
+                p.spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(0.0),
+                        top: Val::Px(0.0),
+                        right: Val::Px(0.0),
+                        bottom: Val::Px(0.0),
+                        margin: UiRect::all(Val::Px(4.0)),
+                        ..default()
+                    },
+                    ImageNode {
+                        image_mode: NodeImageMode::Stretch,
+                        ..default()
+                    },
+                    SlotIcon,
+                    Visibility::Hidden,
+                ));
             })
             .id();
         hotbar_slots.push(e);
@@ -217,27 +291,101 @@ fn setup_ui(mut commands: Commands) {
     ));
 
     // Held (cursor) stack.
-    commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            width: Val::Px(44.0),
-            height: Val::Px(44.0),
-            left: Val::Px(0.0),
-            top: Val::Px(0.0),
-            border: UiRect::all(Val::Px(2.0)),
-            border_radius: BorderRadius::all(Val::Px(4.0)),
-            ..default()
-        },
-        BackgroundColor(Color::srgb(0.12, 0.12, 0.14)),
-        BorderColor::all(Color::srgb(0.6, 0.6, 0.65)),
-        HeldStack,
-        Visibility::Hidden,
-        ZIndex(10),
-    ));
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Px(44.0),
+                height: Val::Px(44.0),
+                left: Val::Px(0.0),
+                top: Val::Px(0.0),
+                border: UiRect::all(Val::Px(2.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.12, 0.12, 0.14)),
+            BorderColor::all(Color::srgb(0.6, 0.6, 0.65)),
+            HeldStack,
+            Visibility::Hidden,
+            ZIndex(10),
+        ))
+        .with_children(|p| {
+            p.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(0.0),
+                    right: Val::Px(0.0),
+                    bottom: Val::Px(0.0),
+                    margin: UiRect::all(Val::Px(3.0)),
+                    ..default()
+                },
+                ImageNode {
+                    image_mode: NodeImageMode::Stretch,
+                    ..default()
+                },
+                HeldStackIcon,
+                Visibility::Inherited,
+            ));
+        });
 
     // ---- Inventory panel ----
-    let craft_cells: Vec<Entity> = (0..4)
-        .map(|i| spawn_slot(&mut commands, INV_SLOTS + i, 44.0))
+    let craft_cells: Vec<Entity> = (0..CRAFT_SLOTS)
+        .map(|i| {
+            commands
+                .spawn((
+                    Node {
+                        width: Val::Px(44.0),
+                        height: Val::Px(44.0),
+                        border: UiRect::all(Val::Px(2.0)),
+                        margin: UiRect::new(Val::Px(2.0), Val::Px(2.0), Val::ZERO, Val::ZERO),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.12, 0.12, 0.14)),
+                    BorderColor::all(Color::srgb(0.25, 0.25, 0.28)),
+                    Interaction::default(),
+                    SlotVis { idx: INV_SLOTS + i },
+                    CraftCell(i),
+                    Visibility::Inherited,
+                ))
+                .with_children(|p| {
+                    p.spawn((
+                        Node {
+                            position_type: PositionType::Absolute,
+                            bottom: Val::Px(1.0),
+                            right: Val::Px(4.0),
+                            ..default()
+                        },
+                        Text::new(""),
+                        TextFont {
+                            font_size: FontSize::Px(13.0),
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        SlotCountText,
+                        Visibility::Hidden,
+                    ));
+                    p.spawn((
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: Val::Px(0.0),
+                            top: Val::Px(0.0),
+                            right: Val::Px(0.0),
+                            bottom: Val::Px(0.0),
+                            margin: UiRect::all(Val::Px(3.0)),
+                            ..default()
+                        },
+                        ImageNode {
+                            image_mode: NodeImageMode::Stretch,
+                            ..default()
+                        },
+                        SlotIcon,
+                        Visibility::Hidden,
+                    ));
+                })
+                .id()
+        })
         .collect();
     let craft_out = spawn_slot(&mut commands, CRAFT_OUT, 52.0);
     let main_slots: Vec<Entity> = (0..27)
@@ -271,6 +419,12 @@ fn setup_ui(mut commands: Commands) {
         },))
         .id();
     let craft_r1 = commands
+        .spawn((Node {
+            column_gap: Val::ZERO,
+            ..default()
+        },))
+        .id();
+    let craft_r2 = commands
         .spawn((Node {
             column_gap: Val::ZERO,
             ..default()
@@ -358,11 +512,12 @@ fn setup_ui(mut commands: Commands) {
         .id();
 
     commands.entity(backdrop).add_children(&[panel]);
-    commands.entity(craft_r0).add_children(&craft_cells[0..2]);
-    commands.entity(craft_r1).add_children(&craft_cells[2..4]);
+    commands.entity(craft_r0).add_children(&craft_cells[0..3]);
+    commands.entity(craft_r1).add_children(&craft_cells[3..6]);
+    commands.entity(craft_r2).add_children(&craft_cells[6..9]);
     commands
         .entity(craft_grid)
-        .add_children(&[craft_r0, craft_r1]);
+        .add_children(&[craft_r0, craft_r1, craft_r2]);
     commands
         .entity(craft_row)
         .add_children(&[craft_grid, arrow, craft_out]);
@@ -390,18 +545,31 @@ fn setup_ui(mut commands: Commands) {
 fn toggle_inventory(
     keys: Res<ButtonInput<KeyCode>>,
     mut open: ResMut<InventoryOpen>,
+    mut table: ResMut<TableCraftOpen>,
     mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mut backdrop_q: Query<&mut BackgroundColor, With<InvPanel>>,
-    mut panel_q: Query<&mut Visibility, (With<InvPanelChild>, Without<InvPanel>)>,
-    mut cross_q: Query<&mut Visibility, With<Crosshair>>,
-    mut held_q: Query<&mut Visibility, With<HeldStack>>,
+    mut panel_q: Query<&mut Visibility, (With<InvPanelChild>, Without<Crosshair>, Without<HeldStack>)>,
+    mut cross_q: Query<&mut Visibility, (With<Crosshair>, Without<InvPanelChild>, Without<HeldStack>)>,
+    mut held_q: Query<&mut Visibility, (With<HeldStack>, Without<InvPanelChild>, Without<Crosshair>)>,
     mut craft: ResMut<CraftGrid>,
     mut inv: ResMut<Inventory>,
 ) {
-    if !keys.just_pressed(KeyCode::KeyE) {
+    let e = keys.just_pressed(KeyCode::KeyE);
+    let esc = keys.just_pressed(KeyCode::Escape);
+    if !e && !esc {
         return;
     }
+
+    // Escape when inventory closed: defer to the pause menu (pause.rs handles it).
+    if esc && !open.0 {
+        return;
+    }
+
     open.0 = !open.0;
+    if open.0 {
+        // E always opens the personal 2x2 grid, never the table.
+        table.0 = false;
+    }
 
     if let Ok(mut co) = cursor_q.single_mut() {
         if open.0 {
@@ -410,14 +578,8 @@ fn toggle_inventory(
         } else {
             co.grab_mode = CursorGrabMode::Locked;
             co.visible = false;
-            if let Some(s) = inv.cursor.take() {
-                inv.add(s.id, s.count);
-            }
-            for s in craft.slots.iter_mut() {
-                if let Some(st) = s.take() {
-                    inv.add(st.id, st.count);
-                }
-            }
+            return_items(&mut inv, &mut craft);
+            table.0 = false;
         }
     }
 
@@ -444,6 +606,66 @@ fn toggle_inventory(
     }
     for mut vis in held_q.iter_mut() {
         *vis = Visibility::Hidden;
+    }
+}
+
+fn return_items(inv: &mut Inventory, craft: &mut CraftGrid) {
+    if let Some(s) = inv.cursor.take() {
+        inv.add(s.id, s.count);
+    }
+    for s in craft.slots.iter_mut() {
+        if let Some(st) = s.take() {
+            inv.add(st.id, st.count);
+        }
+    }
+}
+
+/// Right-clicking a crafting table opens the inventory in 3x3 mode.
+fn open_table_ui(
+    mut ev: MessageReader<OpenCraftTable>,
+    mut open: ResMut<InventoryOpen>,
+    mut table: ResMut<TableCraftOpen>,
+    mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
+    mut backdrop_q: Query<&mut BackgroundColor, With<InvPanel>>,
+    mut panel_q: Query<&mut Visibility, (With<InvPanelChild>, Without<Crosshair>, Without<HeldStack>)>,
+    mut cross_q: Query<&mut Visibility, (With<Crosshair>, Without<InvPanelChild>, Without<HeldStack>)>,
+    mut held_q: Query<&mut Visibility, (With<HeldStack>, Without<InvPanelChild>, Without<Crosshair>)>,
+) {
+    if ev.read().next().is_none() || open.0 {
+        return;
+    }
+    open.0 = true;
+    table.0 = true;
+
+    if let Ok(mut co) = cursor_q.single_mut() {
+        co.grab_mode = CursorGrabMode::None;
+        co.visible = true;
+    }
+    if let Ok(mut bg) = backdrop_q.single_mut() {
+        *bg = BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45));
+    }
+    if let Ok(mut vis) = panel_q.single_mut() {
+        *vis = Visibility::Visible;
+    }
+    for mut vis in cross_q.iter_mut() {
+        *vis = Visibility::Hidden;
+    }
+    for mut vis in held_q.iter_mut() {
+        *vis = Visibility::Hidden;
+    }
+}
+
+/// In personal mode only the 2x2 sub-grid (cells 0,1,3,4) is visible/clickable.
+fn update_craft_layout(
+    table: Res<TableCraftOpen>,
+    mut cell_q: Query<(&CraftCell, &mut Visibility)>,
+) {
+    if !table.is_changed() {
+        return;
+    }
+    for (cell, mut vis) in cell_q.iter_mut() {
+        let shown = table.0 || matches!(cell.0, 0 | 1 | 3 | 4);
+        *vis = if shown { Visibility::Inherited } else { Visibility::Hidden };
     }
 }
 
@@ -528,35 +750,49 @@ fn slot_clicks(
     mut inv: ResMut<Inventory>,
     mut craft: ResMut<CraftGrid>,
     open: Res<InventoryOpen>,
+    table: Res<TableCraftOpen>,
 ) {
     if !open.0 {
         return;
     }
     for (slot, interaction) in clicks.iter_mut() {
         if *interaction == Interaction::Pressed {
-            click_slot(slot.idx, &mut inv, &mut craft);
+            // Personal mode: ignore clicks on hidden 3x3-only cells.
+            if !table.0 && (INV_SLOTS..CRAFT_OUT).contains(&slot.idx) {
+                let cell = slot.idx - INV_SLOTS;
+                if !matches!(cell, 0 | 1 | 3 | 4) {
+                    continue;
+                }
+            }
+            click_slot(slot.idx, &mut inv, &mut craft, table.0);
         }
     }
 }
 
-fn stack_at(inv: &Inventory, craft: &CraftGrid, idx: usize) -> Option<Stack> {
+fn stack_at(inv: &Inventory, craft: &CraftGrid, idx: usize, table: bool) -> Option<Stack> {
     if idx < INV_SLOTS {
         inv.slots[idx]
     } else if idx < CRAFT_OUT {
         craft.slots[idx - INV_SLOTS]
     } else {
-        craft_result(&craft.slots).map(|(id, count)| Stack { id, count })
+        items::craft_result(&craft.slots, table).map(|(id, count, _)| Stack::new(id, count))
     }
 }
 
 fn refresh_slots(
     inv: Res<Inventory>,
     craft: Res<CraftGrid>,
+    table: Res<TableCraftOpen>,
+    icons: Res<ItemIcons>,
     mut slot_q: Query<(&SlotVis, &mut BackgroundColor, &Children)>,
-    mut text_q: Query<(&mut Text, &mut Visibility), With<SlotCountText>>,
+    mut text_q: Query<(&mut Text, &mut Visibility, &mut Node), With<SlotCountText>>,
+    mut icon_q: Query<
+        (&mut ImageNode, &mut Visibility, &mut Node),
+        (With<SlotIcon>, Without<SlotCountText>),
+    >,
 ) {
     for (slot, mut bg, children) in slot_q.iter_mut() {
-        let stack = stack_at(&inv, &craft, slot.idx);
+        let stack = stack_at(&inv, &craft, slot.idx, table.0);
         let (r, g, b) = match stack {
             Some(s) => {
                 let c = item_color(s.id);
@@ -566,16 +802,48 @@ fn refresh_slots(
         };
         *bg = BackgroundColor(Color::srgb(r, g, b));
 
-        if let Some(&child) = children.first() {
-            if let Ok((mut text, mut vis)) = text_q.get_mut(child) {
-                match stack {
-                    Some(s) if s.count > 1 => {
-                        text.0 = s.count.to_string();
-                        *vis = Visibility::Visible;
+        let mut text_done = false;
+        let mut icon_done = false;
+        for child in children.iter() {
+            if !text_done {
+                if let Ok((mut text, mut vis, mut node)) = text_q.get_mut(child) {
+                    match stack {
+                        Some(s) if s.count > 1 => {
+                            text.0 = s.count.to_string();
+                            *vis = Visibility::Inherited;
+                            node.display = Display::Flex;
+                        }
+                        // Tools show remaining durability in the corner.
+                        Some(s) if s.dura > 0 => {
+                            text.0 = s.dura.to_string();
+                            *vis = Visibility::Inherited;
+                            node.display = Display::Flex;
+                        }
+                        _ => {
+                            *vis = Visibility::Inherited;
+                            node.display = Display::None;
+                        }
                     }
-                    _ => {
-                        *vis = Visibility::Hidden;
+                    text_done = true;
+                    continue;
+                }
+            }
+            if !icon_done {
+                if let Ok((mut img, mut vis, mut node)) = icon_q.get_mut(child) {
+                    match stack {
+                        Some(s) => {
+                            if let Some(h) = icons.0.get(&s.id) {
+                                img.image = h.clone();
+                            }
+                            *vis = Visibility::Inherited;
+                            node.display = Display::Flex;
+                        }
+                        None => {
+                            *vis = Visibility::Inherited;
+                            node.display = Display::None;
+                        }
                     }
+                    icon_done = true;
                 }
             }
         }
@@ -585,10 +853,18 @@ fn refresh_slots(
 fn update_held(
     inv: Res<Inventory>,
     open: Res<InventoryOpen>,
+    icons: Res<ItemIcons>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut held_q: Query<(&mut Node, &mut Visibility, &mut BackgroundColor), With<HeldStack>>,
+    mut icon_q: Query<
+        (&mut ImageNode, &mut Node),
+        (With<HeldStackIcon>, Without<HeldStack>),
+    >,
 ) {
     let Ok((mut node, mut vis, mut bg)) = held_q.single_mut() else {
+        return;
+    };
+    let Ok((mut icon, mut inode)) = icon_q.single_mut() else {
         return;
     };
     if !open.0 {
@@ -606,9 +882,14 @@ fn update_held(
             let c = item_color(s.id);
             *bg = BackgroundColor(Color::srgb(c[0], c[1], c[2]));
             *vis = Visibility::Visible;
+            if let Some(h) = icons.0.get(&s.id) {
+                icon.image = h.clone();
+            }
+            inode.display = Display::Flex;
         }
         None => {
             *vis = Visibility::Hidden;
+            inode.display = Display::None;
         }
     }
 }

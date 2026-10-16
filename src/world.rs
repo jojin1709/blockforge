@@ -109,6 +109,7 @@ pub struct MeshTask {
 pub struct GameMaterials {
     pub opaque: Handle<StandardMaterial>,
     pub water: Handle<StandardMaterial>,
+    pub atlas: Handle<Image>,
 }
 
 pub struct WorldPlugin;
@@ -136,14 +137,18 @@ fn setup_materials(
     });
     let water = mats.add(StandardMaterial {
         base_color: Color::srgba(1.0, 1.0, 1.0, 0.55),
-        base_color_texture: Some(atlas),
+        base_color_texture: Some(atlas.clone()),
         alpha_mode: AlphaMode::Blend,
         perceptual_roughness: 0.2,
         reflectance: 0.4,
         cull_mode: None,
         ..default()
     });
-    commands.insert_resource(GameMaterials { opaque, water });
+    commands.insert_resource(GameMaterials {
+        opaque,
+        water,
+        atlas,
+    });
 }
 
 fn spawn_gen(commands: &mut Commands, world: &mut World, cx: i32, cz: i32) {

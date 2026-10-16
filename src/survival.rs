@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use crate::inventory::InventoryOpen;
 use crate::player::Player;
 use crate::terrain::{surface_height, SEA_LEVEL};
+use crate::textures;
 use crate::world::SEED;
 
 pub const MAX_HP: f32 = 20.0;
@@ -31,6 +32,14 @@ pub struct HeartIcon(pub usize);
 #[derive(Component)]
 pub struct FoodIcon(pub usize);
 
+/// Cached heart textures: [empty, half, full]
+#[derive(Resource)]
+pub struct HeartTextures(pub [Handle<Image>; 3]);
+
+/// Cached food textures: [empty, half, full]
+#[derive(Resource)]
+pub struct FoodTextures(pub [Handle<Image>; 3]);
+
 fn sur_or_open_changed(sur: Res<Survival>, open: Res<InventoryOpen>) -> bool {
     sur.is_changed() || open.is_changed()
 }
@@ -53,19 +62,33 @@ fn icon_node() -> Node {
         width: Val::Px(16.0),
         height: Val::Px(16.0),
         margin: UiRect::new(Val::Px(1.0), Val::Px(1.0), Val::ZERO, Val::ZERO),
-        border_radius: BorderRadius::all(Val::Px(3.0)),
         ..default()
     }
 }
 
-fn setup_bars(mut commands: Commands) {
+fn setup_bars(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+) {
+    // Build heart textures: empty (0.0), half (0.5), full (1.0).
+    let heart_empty = images.add(textures::build_heart_image(0.0));
+    let heart_half = images.add(textures::build_heart_image(0.5));
+    let heart_full = images.add(textures::build_heart_image(1.0));
+    commands.insert_resource(HeartTextures([heart_empty.clone(), heart_half.clone(), heart_full.clone()]));
+
+    // Build food textures: empty, half, full.
+    let food_empty = images.add(textures::build_food_image(0.0));
+    let food_half = images.add(textures::build_food_image(0.5));
+    let food_full = images.add(textures::build_food_image(1.0));
+    commands.insert_resource(FoodTextures([food_empty.clone(), food_half.clone(), food_full.clone()]));
+
     let mut heart_kids = Vec::new();
     for i in 0..10 {
         heart_kids.push(
             commands
                 .spawn((
                     icon_node(),
-                    BackgroundColor(Color::srgb(0.15, 0.05, 0.05)),
+                    ImageNode::new(heart_full.clone()),
                     HeartIcon(i),
                 ))
                 .id(),
@@ -77,7 +100,7 @@ fn setup_bars(mut commands: Commands) {
             commands
                 .spawn((
                     icon_node(),
-                    BackgroundColor(Color::srgb(0.16, 0.12, 0.08)),
+                    ImageNode::new(food_full.clone()),
                     FoodIcon(i),
                 ))
                 .id(),
@@ -111,37 +134,45 @@ fn setup_bars(mut commands: Commands) {
 fn refresh_bars(
     sur: Res<Survival>,
     open: Res<InventoryOpen>,
-    mut heart_q: Query<(&HeartIcon, &mut BackgroundColor), Without<FoodIcon>>,
-    mut food_q: Query<(&FoodIcon, &mut BackgroundColor), Without<HeartIcon>>,
+    heart_tex: Res<HeartTextures>,
+    food_tex: Res<FoodTextures>,
+    mut heart_q: Query<(&HeartIcon, &mut ImageNode), Without<FoodIcon>>,
+    mut food_q: Query<(&FoodIcon, &mut ImageNode), Without<HeartIcon>>,
 ) {
-    for (h, mut bg) in heart_q.iter_mut() {
+    for (h, mut node) in heart_q.iter_mut() {
         let v = sur.health - h.0 as f32 * 2.0;
-        *bg = BackgroundColor(if v >= 2.0 {
-            Color::srgb(0.85, 0.1, 0.12)
+        let idx = if v >= 2.0 {
+            2
         } else if v >= 1.0 {
-            Color::srgb(0.7, 0.14, 0.14)
+            1
         } else {
-            Color::srgb(0.18, 0.08, 0.08)
-        });
+            0
+        };
+        node.image = heart_tex.0[idx].clone();
     }
-    for (f, mut bg) in food_q.iter_mut() {
+    for (f, mut node) in food_q.iter_mut() {
         let v = sur.hunger - f.0 as f32 * 2.0;
-        *bg = BackgroundColor(if v >= 2.0 {
-            Color::srgb(0.75, 0.45, 0.15)
+        let idx = if v >= 2.0 {
+            2
         } else if v >= 1.0 {
-            Color::srgb(0.62, 0.38, 0.16)
+            1
         } else {
-            Color::srgb(0.16, 0.12, 0.08)
-        });
+            0
+        };
+        node.image = food_tex.0[idx].clone();
     }
     let _ = open.0;
 }
 
 fn survival_tick(
     time: Res<Time>,
+    pause: Res<crate::pause::PauseOpen>,
     mut sur: ResMut<Survival>,
     mut player_q: Query<&mut Player>,
 ) {
+    if pause.0 {
+        return;
+    }
     let dt = time.delta_secs().min(0.1);
     sur.hunger = (sur.hunger - dt * 0.04).max(0.0);
     if sur.hunger > 17.0 && sur.health < MAX_HP {

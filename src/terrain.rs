@@ -89,6 +89,32 @@ fn set(col: &mut ColumnBlocks, wy: i32, lx: i32, lz: i32, id: BlockId) {
     col[(wy / 16) as usize][idx(lx, wy % 16, lz)] = id;
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Biome {
+    Plains,
+    Desert,
+    Forest,
+    Snow,
+}
+
+pub fn biome_at(seed: u64, x: i32, z: i32) -> Biome {
+    let s = seed as u32;
+    let t = Perlin::new(s.wrapping_add(10));
+    let h = Perlin::new(s.wrapping_add(11));
+    // Low frequency so biomes form large regions.
+    let tv = t.get([x as f64 * 0.004, z as f64 * 0.004]);
+    let hv = h.get([x as f64 * 0.005 + 100.0, z as f64 * 0.005 - 50.0]);
+    if tv < -0.25 {
+        Biome::Snow
+    } else if tv > 0.3 && hv < 0.05 {
+        Biome::Desert
+    } else if hv > 0.2 {
+        Biome::Forest
+    } else {
+        Biome::Plains
+    }
+}
+
 pub fn gen_column(cx: i32, cz: i32, seed: u64) -> ColumnBlocks {
     let n = Noises::new(seed);
     let mut heights = std::collections::HashMap::<(i32, i32), i32>::new();
@@ -112,14 +138,33 @@ pub fn gen_column(cx: i32, cz: i32, seed: u64) -> ColumnBlocks {
             let wz = base_z + lz;
             let h = height(wx, wz);
             let beach = h <= SEA_LEVEL + 1;
+            let biome = biome_at(seed, wx, wz);
             for wy in 0..WORLD_HEIGHT {
                 let id = if wy == 0 {
                     BEDROCK
                 } else if wy <= h {
                     if wy == h {
-                        if beach { SAND } else { GRASS }
+                        if beach {
+                            SAND
+                        } else {
+                            match biome {
+                                Biome::Desert => SAND,
+                                Biome::Snow => SNOW,
+                                _ => GRASS,
+                            }
+                        }
                     } else if wy >= h - 3 {
-                        if beach { SAND } else { DIRT }
+                        if beach {
+                            SAND
+                        } else if biome == Biome::Desert && wy >= h - 2 {
+                            SANDSTONE
+                        } else if biome == Biome::Snow {
+                            DIRT
+                        } else {
+                            DIRT
+                        }
+                    } else if biome == Biome::Desert && wy >= h - 6 {
+                        SANDSTONE
                     } else {
                         STONE
                     }
@@ -140,7 +185,7 @@ pub fn gen_column(cx: i32, cz: i32, seed: u64) -> ColumnBlocks {
             let h = height(wx, wz);
             for wy in 1..=h {
                 let id = get(&col, wy, lx, lz);
-                if id != STONE && id != DIRT && id != SAND {
+                if id != STONE && id != DIRT && id != SAND && id != SANDSTONE {
                     continue;
                 }
                 if wy >= 5 && n.is_cave(wx, wy, wz) {
@@ -162,7 +207,14 @@ pub fn gen_column(cx: i32, cz: i32, seed: u64) -> ColumnBlocks {
     for tz in (base_z - 2)..=(base_z + CHUNK_SIZE + 1) {
         for tx in (base_x - 2)..=(base_x + CHUNK_SIZE + 1) {
             let th = hash2(seed ^ 0x5EED, tx, tz);
-            if th % 24 != 0 {
+            let biome = biome_at(seed, tx, tz);
+            let chance = match biome {
+                Biome::Forest => 8,
+                Biome::Plains => 32,
+                Biome::Snow => 48,
+                Biome::Desert => 0,
+            };
+            if chance == 0 || th % chance != 0 {
                 continue;
             }
             let h = height(tx, tz);

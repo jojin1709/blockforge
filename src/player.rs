@@ -3,10 +3,14 @@ use bevy::math::EulerRot;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
-use crate::blocks::{def, AIR, BEDROCK, WATER};
-use crate::inventory::{as_block, break_drop, APPLE, Inventory, InventoryOpen};
+use crate::audio::{SoundEvent, SoundQueue};
+use crate::blocks::{def, AIR, CRAFTING_TABLE, WATER};
+use crate::inventory::{as_block, APPLE, Inventory, InventoryOpen};
+use crate::pause::PauseOpen;
 use crate::survival::Survival;
 use crate::terrain::{surface_height, SEA_LEVEL, WORLD_HEIGHT};
+use crate::ui::OpenCraftTable;
+use crate::visuals::SwingTimer;
 use crate::world::{World, SEED};
 
 const HALF: f32 = 0.3;
@@ -21,7 +25,7 @@ const TERMINAL: f32 = -18.0;
 const WALK: f32 = 4.6;
 const SPRINT: f32 = 7.2;
 const SNEAK: f32 = 1.5;
-const REACH: f32 = 6.0;
+pub const REACH: f32 = 6.0;
 
 #[derive(Component)]
 pub struct Player {
@@ -33,12 +37,16 @@ pub struct Player {
     pub sneak: bool,
 }
 
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PlayerMovement;
+
 pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (spawn_player, grab_cursor))
-            .add_systems(Update, player_control);
+        app.configure_sets(Update, PlayerMovement)
+            .add_systems(Startup, (spawn_player, grab_cursor))
+            .add_systems(Update, player_control.in_set(PlayerMovement));
     }
 }
 
@@ -55,6 +63,15 @@ fn spawn_player(mut commands: Commands) {
         },
         Camera3d::default(),
         Transform::from_xyz(0.5, h + 1.05 + EYE, 0.5),
+        DistanceFog {
+            color: Color::srgb(0.45, 0.70, 0.95),
+            directional_light_color: Color::NONE,
+            directional_light_exponent: 30.0,
+            falloff: FogFalloff::Linear {
+                start: 72.0,
+                end: 112.0,
+            },
+        },
     ));
 }
 
@@ -89,7 +106,7 @@ fn block_intersects_player(feet: Vec3, b: IVec3) -> bool {
         && max.z > bmin.z
 }
 
-fn raycast(world: &World, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<(IVec3, IVec3)> {
+pub fn raycast(world: &World, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<(IVec3, IVec3)> {
     let mut v = IVec3::new(
         origin.x.floor() as i32,
         origin.y.floor() as i32,
@@ -156,15 +173,20 @@ pub fn player_control(
     mut world: ResMut<World>,
     mut inv: ResMut<Inventory>,
     mut sur: ResMut<Survival>,
-    mut open: ResMut<InventoryOpen>,
-    mut q: Query<(&mut Player, &mut Transform)>,
-    mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
+    open: Res<InventoryOpen>,
+    pause: Res<PauseOpen>,
+    mut swing: ResMut<SwingTimer>,
+    mut sounds: ResMut<SoundQueue>,
+    mut table_ev: MessageWriter<OpenCraftTable>,
+    mut q: Query<&mut Player>,
+    cursor_q: Query<&CursorOptions, With<PrimaryWindow>>,
 ) {
     let grabbed = cursor_q
         .single()
         .map(|co| co.grab_mode != CursorGrabMode::None)
         .unwrap_or(false);
 
+    // Drain mouse events so they don't burst when unpausing.
     let mut look = Vec2::ZERO;
     for ev in motion.read() {
         if grabbed {
@@ -172,23 +194,12 @@ pub fn player_control(
         }
     }
 
-    let Ok(mut co) = cursor_q.single_mut() else { return };
-    if keys.just_pressed(KeyCode::Escape) {
-        if open.0 {
-            open.0 = false;
-            co.grab_mode = CursorGrabMode::Locked;
-            co.visible = false;
-        } else if co.grab_mode == CursorGrabMode::None {
-            co.grab_mode = CursorGrabMode::Locked;
-            co.visible = false;
-        } else {
-            co.grab_mode = CursorGrabMode::None;
-            co.visible = true;
-        }
+    // Pause menu or inventory open: freeze player entirely.
+    if pause.0 || open.0 {
+        return;
     }
-    drop(co);
 
-    let Ok((mut player, mut transform)) = q.single_mut() else { return };
+    let Ok(mut player) = q.single_mut() else { return };
 
     player.yaw -= look.x * SENS;
     player.pitch = (player.pitch - look.y * SENS).clamp(-1.55, 1.55);
@@ -201,27 +212,26 @@ pub fn player_control(
     let dir = rot * Vec3::NEG_Z;
 
     // While inventory is open: no world interaction.
-    if !open.0 && grabbed && mouse_buttons.just_pressed(MouseButton::Left) {
-        if let Some((hit, _)) = raycast(&world, eye, dir, REACH) {
-            let id = world.block(hit.x, hit.y, hit.z);
-            if id != AIR && id != WATER && id != BEDROCK && def(id).solid {
-                world.set_block(hit.x, hit.y, hit.z, AIR);
-                if let Some(drop) = break_drop(id) {
-                    inv.add(drop, 1);
-                }
+    // (Block breaking is handled by mining.rs — hold LMB.)
+    if !open.0 && grabbed && mouse_buttons.just_pressed(MouseButton::Right) {
+        let hit = raycast(&world, eye, dir, REACH);
+        // Right-click a crafting table (with anything or nothing held) to open 3x3 UI.
+        if let Some((h, _)) = hit {
+            if world.block(h.x, h.y, h.z) == CRAFTING_TABLE {
+                table_ev.write(OpenCraftTable);
+                return;
             }
         }
-    }
-    if !open.0 && grabbed && mouse_buttons.just_pressed(MouseButton::Right) {
         let held = inv.slots[inv.selected];
         if let Some(stack) = held {
             if stack.id == APPLE {
                 if sur.hunger < 20.0 {
                     sur.hunger = (sur.hunger + 4.0).min(20.0);
                     inv.consume_selected();
+                    sounds.0.push(SoundEvent::Eat);
                 }
             } else if let Some(b) = as_block(stack.id) {
-                if let Some((_, prev)) = raycast(&world, eye, dir, REACH) {
+                if let Some((_, prev)) = hit {
                     let cur = world.block(prev.x, prev.y, prev.z);
                     if (cur == AIR || cur == WATER)
                         && !block_intersects_player(player.pos, prev)
@@ -230,6 +240,8 @@ pub fn player_control(
                     {
                         world.set_block(prev.x, prev.y, prev.z, b);
                         inv.consume_selected();
+                        swing.0 = 0.25;
+                        sounds.0.push(SoundEvent::Place(b));
                     }
                 }
             }
@@ -239,8 +251,6 @@ pub fn player_control(
     let chunk_x = (player.pos.x.floor() as i32).div_euclid(16);
     let chunk_z = (player.pos.z.floor() as i32).div_euclid(16);
     if !world.column_loaded(chunk_x, chunk_z) {
-        transform.translation = eye;
-        transform.rotation = rot;
         return;
     }
 
@@ -358,7 +368,4 @@ pub fn player_control(
     }
 
     player.pos = feet;
-    let eye_h = if player.sneak { EYE_SNEAK } else { EYE };
-    transform.translation = feet + Vec3::new(0.0, eye_h, 0.0);
-    transform.rotation = rot;
 }

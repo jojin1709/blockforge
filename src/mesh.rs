@@ -53,7 +53,7 @@ fn shade(part: Part) -> f32 {
     match part {
         Part::Top => 1.0,
         Part::Bottom => 0.55,
-        Part::SideX => 0.7,
+        Part::SideX => 0.75,
         Part::SideZ => 0.85,
     }
 }
